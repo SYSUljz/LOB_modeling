@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import sys
 import os
+import argparse
 
 # Ensure we can import from the same directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -12,9 +13,16 @@ from data import prepare_dataframe, get_dataloaders
 from model import deeplob
 from train import batch_gd
 
-def main():
+def get_args():
+    parser = argparse.ArgumentParser(description="Train DeepLOB model")
+    parser.add_argument("--data-path", type=str, 
+                        default=r'/home/jack_li/python/LOB_research/fetch_data/data/BTC/processed_merged.parquet',
+                        help="Path to the processed parquet data file")
+    return parser.parse_args()
+
+def main(args):
     # Configuration
-    FILE_PATH = r'/home/jack_li/python/LOB_research/fetch_data/data/BTC/processed_merged.parquet'
+    FILE_PATH = args.data_path
     WINDOW = 450000
     K_INDEX = 0  # Index of the label to use from the label columns
     NUM_CLASSES = 3
@@ -28,6 +36,7 @@ def main():
 
     # 1. Prepare Data
     # This step reads the parquet, calculates stats, and computes Z-scores
+    print(f"Loading data from: {FILE_PATH}")
     df = prepare_dataframe(FILE_PATH, window=WINDOW)
     
     # 2. Create DataLoaders
@@ -56,4 +65,5 @@ def main():
     print("Training complete.")
 
 if __name__ == "__main__":
-    main()
+    args = get_args()
+    main(args)
