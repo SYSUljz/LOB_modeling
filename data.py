@@ -5,87 +5,58 @@ import bisect
 from torch.utils import data
 from torch.utils.data import DataLoader, random_split
 
-def data_classification(X, Y, T):
-    [N, D] = X.shape
-    df = np.array(X)
-    dY = np.array(Y)
-    
-    # 确保数据长度足够进行至少一次切片
-    if N < T:
-        return None, None
-
-    dataY = dY[T - 1:N]
-    dataX = np.zeros((N - T + 1, T, D))
-    
-    # 注意：这里使用循环效率较低，如果数据量巨大建议改用 stride_tricks
-    for i in range(T, N + 1):
-        dataX[i - T] = df[i - T:i, :]
-
-    return dataX, dataY
-
 class Dataset(data.Dataset):
-    """Characterizes a dataset for PyTorch"""
+    """Characterizes a dataset for PyTorch with Lazy Loading"""
     def __init__(self, df, k, num_classes, T):
         """Initialization""" 
         self.k = k
         self.num_classes = num_classes
         self.T = T
         
-        # 容器，用于存放每个 session 处理后的数据
-        self.all_x_list = []
-        self.all_y_list = []
+        # Containers for RAW session data (not windowed)
+        self.raw_sessions_x = []
+        self.raw_sessions_y = []
+        
+        # Metadata to map global index to specific session
         self.cumulative_lengths = []
-        total_len = 0
+        total_valid_samples = 0
         
-        # --- 核心修改开始 ---
-        # 1. 按照 session_id 分组
-        # 假设 session_id 是 df 的最后一列，或者直接用列名 'session_id'
+        # 1. Group by session_id
         grouped = df.groupby('session_id')
-        
-        print(f"开始处理 {len(grouped)} 个 Session 的数据拼接...")
+        print(f"Processing {len(grouped)} Sessions...")
 
         for session_id, group_data in grouped:
-            # 2. 对每个 Session 独立提取特征和标签
-            # 确保只取特征列 (前40列)
-            x_session = group_data.iloc[:, :40].to_numpy()
-            
-            # 提取标签列 (排除最后一列 session_id)
-            # 根据 df 结构，labels 是倒数第5列到倒数第1列
-            y_session = group_data.iloc[:, -5:-1].to_numpy() 
+            # 2. Extract raw features and labels
+            # Ensure we use float32 to save 50% memory compared to float64
+            x_session = group_data.iloc[:, :40].to_numpy(dtype=np.float32)
+            y_session = group_data.iloc[:, -5:-1].to_numpy(dtype=np.float32)
 
-            # 3. 在组内进行滑动窗口切片 (T=100)
-            x_processed, y_processed = data_classification(x_session, y_session, self.T)
+            N = len(x_session)
             
-            # 4. 如果该 Session 长度小于 T，会返回 None，需要跳过
-            if x_processed is not None and len(x_processed) > 0:
-                self.all_x_list.append(x_processed)
-                
-                # 处理 Label: 取第 k 个 label 并转为 0-based
-                # y_processed shape: (N_sess, 4)
-                # y_target shape: (N_sess,)
-                #y_target = y_processed[:, self.k] - 1
-                y_target = y_processed[:, self.k] + 1
-                self.all_y_list.append(y_target)
-                
-                total_len += len(x_processed)
-                self.cumulative_lengths.append(total_len)
-        
-        if total_len == 0:
-            raise ValueError("数据不足：所有 Session 的长度都小于 T，无法生成数据集。")
+            # 3. Calculate how many valid windows this session CAN provide
+            # If length is 1000 and T is 100, we can make 901 windows.
+            num_windows = N - self.T + 1
             
-        print(f"数据处理完成。总样本数: {total_len}")
-        # --- 核心修改结束 ---
+            # Only keep sessions long enough to form at least one window
+            if num_windows > 0:
+                self.raw_sessions_x.append(x_session)
+                self.raw_sessions_y.append(y_session)
+                
+                total_valid_samples += num_windows
+                self.cumulative_lengths.append(total_valid_samples)
         
-        self.length = total_len
+        if total_valid_samples == 0:
+            raise ValueError("Insufficient data: All sessions are shorter than T.")
+            
+        print(f"Data setup complete. Total Virtual Samples: {total_valid_samples}")
+        # Note: We are now storing ~100x less data in RAM
+        self.length = total_valid_samples
 
     def __len__(self):
-        """Denotes the total number of samples"""
         return self.length
 
     def __getitem__(self, index):
-        """Generates samples of data"""
-        # 找到 index 对应的 session
-        # cumulative_lengths 是递增序列，使用 bisect_right 查找插入点
+        # 1. Find which session this index belongs to
         session_idx = bisect.bisect_right(self.cumulative_lengths, index)
         
         if session_idx == 0:
@@ -93,21 +64,35 @@ class Dataset(data.Dataset):
         else:
             local_index = index - self.cumulative_lengths[session_idx - 1]
         
-        # 取数据
-        # x_data shape: (T, D)
-        x_data = self.all_x_list[session_idx][local_index]
-        # y_data shape: scalar
-        y_data = self.all_y_list[session_idx][local_index]
+        # 2. Retrieve the Raw Session Data
+        x_raw = self.raw_sessions_x[session_idx]
+        y_raw = self.raw_sessions_y[session_idx]
         
-        # 转为 Tensor
-        # x_tensor: (1, T, D)
-        x_tensor = torch.from_numpy(x_data).float()
+        # 3. SLICE ON THE FLY (The Magic Step)
+        # We need a window of length T starting at local_index
+        # x_window shape: (T, D)
+        x_window = x_raw[local_index : local_index + self.T]
+        
+        # 4. Get the corresponding label
+        # In your original logic, label corresponds to the END of the window
+        # The label index matches the last row of the x_window
+        label_index = local_index + self.T - 1
+        y_vals = y_raw[label_index] 
+        
+        # Process Label (Specific to your logic)
+        y_target = y_vals[self.k] + 1
+        
+        # 5. Convert to Tensor
+        # x_tensor: (1, T, D) -> Unsqueeze to match your format
+        x_tensor = torch.from_numpy(x_window).float()
         x_tensor = torch.unsqueeze(x_tensor, 0) 
         
-        # y_tensor: scalar
-        y_tensor = torch.tensor(y_data).long()
+        y_tensor = torch.tensor(y_target).long()
         
         return x_tensor, y_tensor
+
+# The rest of your helper functions (prepare_dataframe, get_dataloaders) remain mostly the same,
+# but you no longer need the standalone 'data_classification' function.
 
 def prepare_dataframe(file_path, window=450000):
     print(f"Loading data from {file_path}...")

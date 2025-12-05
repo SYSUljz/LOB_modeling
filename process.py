@@ -16,12 +16,12 @@ def main():
     # Configuration
     FILE_PATH = r'/home/jack_li/python/LOB_research/fetch_data/data/BTC/processed_merged.parquet'
     WINDOW = 450000
-    K_INDEX = 3  # Index of the label to use from the label columns
+    K_INDEX = 0  # Index of the label to use from the label columns
     NUM_CLASSES = 3
     T = 100
     BATCH_SIZE = 64
     EPOCHS = 50
-    MAX_BATCHES_PER_EPOCH_DEBUG = 5 # Set to None for full epoch, e.g., 5 for a quick test
+    MAX_BATCHES_PER_EPOCH_DEBUG = 200 # Set to None for full epoch, e.g., 5 for a quick test
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -51,7 +51,7 @@ def main():
         test_loader=test_loader, 
         epochs=EPOCHS, 
         device=device,
-        max_batches_per_epoch=MAX_BATCHES_PER_EPOCH_DEBUG
+        #max_batches_per_epoch=MAX_BATCHES_PER_EPOCH_DEBUG
     )
     print("Training complete.")
 

@@ -91,6 +91,5 @@ class deeplob(nn.Module):
         x, _ = self.lstm(x, (h0, c0))
         x = x[:, -1, :]
         x = self.fc1(x)
-        forecast_y = torch.softmax(x, dim=1)
         
-        return forecast_y
+        return x
